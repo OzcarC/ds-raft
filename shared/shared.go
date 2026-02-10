@@ -74,7 +74,12 @@ func (m *Membership) Update(payload Node, reply *Node) error {
 }
 
 func (m *Membership) GetNumNodes(id int, reply *int) error {
-	num := len(m.Members)
+	num := 0
+	for _, node := range m.Members{
+		if node.Alive {
+			num++
+		}
+	}
 	*reply = num
 	return nil
 }
@@ -186,7 +191,6 @@ func (req *Requests) Listen(ID int, reply *Membership) error {
 
 func CombineTables(table1 *Membership, table2 *Membership) *Membership {
 	//higher heartbeat wins-> gossip heartbeat protocol
-
 	merged := NewMembership()
 
 	//copy table1

@@ -17,12 +17,12 @@ const (
 	MAX_NODES = 8
 
 	// times in seconds
-	HEARTBEAT_TIME = 1
 	MSG_TIME       = 2
 	KILL_TIME      = 60
-	DEAD_TIME      = 6
+	DEAD_TIME      = 6	
 
 	// times in milliseconds
+	HEARTBEAT_TIME = 150
 	CANDIDATE_TIME = 150
 	ELECTION_TIME  = 100
 )
@@ -109,7 +109,7 @@ func main() {
 	membership := shared.NewMembership()
 	membership.Add(self_node, &self_node)
 
-	time.AfterFunc(time.Second*HEARTBEAT_TIME, func() { heartbeat(server, &self_node, membership, id) })
+	time.AfterFunc(time.Millisecond*HEARTBEAT_TIME, func() { heartbeat(server, &self_node, membership, id) })
 	time.AfterFunc(time.Second*MSG_TIME, func() { shareTables(server, neighbors, membership, id) })
 	time.AfterFunc(time.Second*time.Duration(KILL_TIME), func() { killNode(id) })
 
@@ -149,7 +149,7 @@ func heartbeat(server *rpc.Client, node *shared.Node, membership *shared.Members
 		fmt.Println(err)
 	}
 
-	time.AfterFunc(time.Second*HEARTBEAT_TIME, func() { heartbeat(server, node, membership, id) })
+	time.AfterFunc(time.Millisecond*HEARTBEAT_TIME, func() { heartbeat(server, node, membership, id) })
 }
 
 func shareTables(server *rpc.Client, neighbors [2]int, membership *shared.Membership, id int) {
@@ -163,6 +163,8 @@ func shareTables(server *rpc.Client, neighbors [2]int, membership *shared.Member
 			if data.Hbcounter == v.Hbcounter {
 				if v.Time < calcTime()-DEAD_TIME {
 					v.Alive = false
+					var reply shared.Node
+					server.Call("Membership.Update", v, &reply)
 				}
 			} else {
 				v.Time = calcTime()
@@ -217,7 +219,7 @@ func countVotes(server *rpc.Client) {
 		fmt.Printf("Votes for Node %d: %d\n", k, v)
 	}
 	server.Call("Membership.GetNumNodes", self_node.ID, &numNodes)
-	fmt.Printf("Counted %d votes for Node %d\n", election.Results[self_node.ID], self_node.ID)
+	fmt.Printf("Counted %d votes for Node %d with num nodes: %d\n", election.Results[self_node.ID], self_node.ID, numNodes)
 	if election.Results[self_node.ID] > numNodes/2 {
 		// clear election
 		reply := false
