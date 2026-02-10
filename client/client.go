@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"net/rpc"
 	"os"
 	"strconv"
@@ -12,17 +13,25 @@ import (
 )
 
 const (
-	MIN_NODE   = 1
-	MAX_NODES  = 8
-	X_TIME     = 1
-	Y_TIME     = 2
-	Z_TIME_MAX = 100
-	Z_TIME_MIN = 10
-	DEAD_TIME  = 6
+	MIN_NODE  = 1
+	MAX_NODES = 8
+
+	// times in seconds
+	HEARTBEAT_TIME = 1
+	MSG_TIME       = 2
+	KILL_TIME      = 60
+	DEAD_TIME      = 6
+
+	// times in milliseconds
+	CANDIDATE_TIME = 150
+	ELECTION_TIME  = 100
 )
 
 var self_node shared.Node
 var start_time = time.Now()
+var leader shared.Leader
+var candidate bool = false
+var highest_term = 0
 
 // Send the current membership table to a neighboring node with the provided ID
 func sendMessage(server *rpc.Client, id int, membership shared.Membership) {
@@ -31,7 +40,6 @@ func sendMessage(server *rpc.Client, id int, membership shared.Membership) {
 		Table: membership,
 	}
 	res := false
-	fmt.Printf("Sending msg to %d\n", id)
 	server.Call("Requests.Add", req, &res)
 	if !res {
 		fmt.Printf("Error sending message to %d\n", id)
@@ -41,9 +49,7 @@ func sendMessage(server *rpc.Client, id int, membership shared.Membership) {
 // Read incoming messages from other nodes
 func readMessages(server *rpc.Client, id int, membership *shared.Membership) *shared.Membership {
 	var table shared.Membership
-	fmt.Printf("Listening for msg from %d\n", id)
 	if err := server.Call("Requests.Listen", id, &table); err != nil {
-		fmt.Println("Oops")
 		return membership
 	}
 
@@ -59,9 +65,6 @@ func calcTime() float64 {
 var wg = &sync.WaitGroup{}
 
 func main() {
-	//rand.Seed(time.Now().UnixNano())
-	Z_TIME := 60
-
 	// Connect to RPC server
 	server, _ := rpc.DialHTTP("tcp", "localhost:9005")
 
@@ -95,26 +98,26 @@ func main() {
 		fmt.Printf("Success: Node created with id= %d\n", id)
 	}
 
+	if err := server.Call("Leader.Get", leader, &leader); err != nil {
+		fmt.Println("No leader found")
+	} else {
+		fmt.Printf("Leader %d found. Waiting for heartbeats\n", leader.NodeID)
+	}
+
 	neighbors := self_node.InitializeNeighbors(id)
-	fmt.Println("Neighbors:", neighbors)
 
 	membership := shared.NewMembership()
 	membership.Add(self_node, &self_node)
 
-	//sendMessage(*server, neighbors[rand.Intn(2)], *membership)
-
-	// crashTime := self_node.CrashTime()
-
-	time.AfterFunc(time.Second*X_TIME, func() { runAfterX(server, &self_node, membership, id) })
-	time.AfterFunc(time.Second*Y_TIME, func() { runAfterY(server, neighbors, membership, id) })
-	time.AfterFunc(time.Second*time.Duration(Z_TIME), func() { runAfterZ(id) })
+	time.AfterFunc(time.Second*HEARTBEAT_TIME, func() { heartbeat(server, &self_node, membership, id) })
+	time.AfterFunc(time.Second*MSG_TIME, func() { shareTables(server, neighbors, membership, id) })
+	time.AfterFunc(time.Second*time.Duration(KILL_TIME), func() { killNode(id) })
 
 	wg.Add(1)
 	wg.Wait()
 }
 
-func runAfterX(server *rpc.Client, node *shared.Node, membership *shared.Membership, id int) {
-	//TODO : increment heartbeat, listen
+func heartbeat(server *rpc.Client, node *shared.Node, membership *shared.Membership, id int) {
 	var self_node_response shared.Node
 	node.Hbcounter++
 	node.Time = calcTime()
@@ -123,11 +126,33 @@ func runAfterX(server *rpc.Client, node *shared.Node, membership *shared.Members
 	membership.Update(payload, &self_node_response)
 
 	server.Call("Membership.Update", payload, &self_node_response)
-	fmt.Printf("Node %d has hb %d, time %.3f\n", node.ID, node.Hbcounter, node.Time)
-	time.AfterFunc(time.Second*X_TIME, func() { runAfterX(server, node, membership, id) })
+
+	var election = shared.Election{}
+	if err := server.Call("Election.Get", leader, &election); err == nil {
+		if len(election.Results) > 0 && election.Term > highest_term {
+			vote := 0
+			reply := false
+			for key := range election.Results {
+				vote = key
+				break
+			}
+			accepted_leader := shared.Leader{
+				NodeID: vote,
+				Term:   election.Term,
+			}
+			server.Call("Election.SendVote", accepted_leader, &reply)
+			if reply {
+				highest_term = election.Term
+			}
+		}
+	} else {
+		fmt.Println(err)
+	}
+
+	time.AfterFunc(time.Second*HEARTBEAT_TIME, func() { heartbeat(server, node, membership, id) })
 }
 
-func runAfterY(server *rpc.Client, neighbors [2]int, membership *shared.Membership, id int) {
+func shareTables(server *rpc.Client, neighbors [2]int, membership *shared.Membership, id int) {
 	for _, n := range neighbors {
 		sendMessage(server, n, *membership)
 	}
@@ -147,12 +172,67 @@ func runAfterY(server *rpc.Client, neighbors [2]int, membership *shared.Membersh
 	}
 
 	*membership = *new_membership
-	fmt.Println("-----   Membership Table   -----")
-	printMembership(*membership)
-	time.AfterFunc(time.Second*Y_TIME, func() { runAfterY(server, neighbors, membership, id) })
+	//fmt.Println("-----   Membership Table   -----")
+	//printMembership(*membership)
+
+	server.Call("Leader.Get", leader, &leader)
+	if !candidate && leader.NodeID == 0 || (leader.NodeID != 0 && !membership.Members[leader.NodeID].Alive) {
+		// start election
+		timeout := time.Duration(rand.IntN(CANDIDATE_TIME) + CANDIDATE_TIME)
+		time.AfterFunc(time.Millisecond*timeout, func() { tryCandidate(server, membership) })
+		fmt.Printf("Starting election timeout in Node %d\n", self_node.ID)
+	}
+
+	time.AfterFunc(time.Second*MSG_TIME, func() { shareTables(server, neighbors, membership, id) })
 }
 
-func runAfterZ(id int) {
+func tryCandidate(server *rpc.Client, membership *shared.Membership) {
+
+	server.Call("Leader.Get", leader, &leader)
+	if leader.NodeID == 0 || (leader.NodeID != 0 && !membership.Members[leader.NodeID].Alive) {
+		fmt.Printf("Election starting in Node %d\n", self_node.ID)
+		candidate = true
+		// do candidate stuff
+		proposal := shared.Leader{
+			NodeID: self_node.ID,
+			Term:   leader.Term + 1,
+		}
+		reply := 0
+		server.Call("Election.RequestVote", proposal, &reply)
+		// set timer, on timeout check election
+		timeout := time.Duration(rand.IntN(ELECTION_TIME))
+		time.AfterFunc(time.Millisecond*timeout, func() { countVotes(server) })
+	} else {
+		candidate = false
+		return
+	}
+}
+
+func countVotes(server *rpc.Client) {
+	var election = shared.Election{}
+	numNodes := 1
+	server.Call("Election.Get", leader, &election)
+	fmt.Printf("----   Election Results For Term %d  ----\n", election.Term)
+	for k, v := range election.Results {
+		fmt.Printf("Votes for Node %d: %d\n", k, v)
+	}
+	server.Call("Membership.GetNumNodes", self_node.ID, &numNodes)
+	fmt.Printf("Counted %d votes for Node %d\n", election.Results[self_node.ID], self_node.ID)
+	if election.Results[self_node.ID] > numNodes/2 {
+		// clear election
+		reply := false
+		new_leader := shared.Leader{
+			NodeID: self_node.ID,
+			Term:   election.Term,
+		}
+		server.Call("Leader.Update", &new_leader, &reply)
+		server.Call("Election.Clear", election.Term, &reply)
+	} else {
+		candidate = false
+	}
+}
+
+func killNode(id int) {
 	if id == 4 {
 		fmt.Println("Node", id, "FAILED")
 		os.Exit(1)

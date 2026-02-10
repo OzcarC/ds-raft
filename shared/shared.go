@@ -11,21 +11,17 @@ const (
 	MAX_NODES = 8
 )
 
+type Leader struct {
+	NodeID int
+	Term   int
+}
+
 // Node struct represents a computing node.
 type Node struct {
 	ID        int
 	Hbcounter int
 	Time      float64
 	Alive     bool
-}
-
-// Generate random crash time from 10-60 seconds
-func (n Node) CrashTime() int {
-	//rand.Seed(time.Now().UnixNano())
-	//max := 60
-	//min := 10
-	//return rand.Intn(max-min) + min  // use for random crash timer
-	return 60 // just use 60 for crash timer
 }
 
 func (n Node) InitializeNeighbors(id int) [2]int {
@@ -77,14 +73,72 @@ func (m *Membership) Update(payload Node, reply *Node) error {
 	return nil
 }
 
+func (m *Membership) GetNumNodes(id int, reply *int) error {
+	num := len(m.Members)
+	*reply = num
+	return nil
+}
+
 // Returns a node with specific ID.
-func (m *Membership) Get(payload int, reply *Node) error {
-	if _, ok := m.Members[payload]; ok {
-		temp := m.Members[payload]
-		reply = &temp
+func (l *Leader) Get(payload Leader, reply *Leader) error {
+	fmt.Printf("leader id: %d\ton term: %d\n", l.NodeID, l.Term)
+	if l.NodeID != 0 {
+		*reply = *l
 		return nil
 	}
-	return errors.New("ID not found in Membership Table")
+	return errors.New("No Leader was found")
+}
+
+func (l *Leader) Update(newLeader *Leader, reply *bool) error {
+	*l = *newLeader
+	*reply = true
+	fmt.Printf("New leader id: %d\ton term: %d\n", l.NodeID, l.Term)
+	return nil
+}
+
+type Election struct {
+	Results map[int]int
+	Term    int
+}
+
+func (e *Election) RequestVote(proposedLeader Leader, reply *int) error {
+	if proposedLeader.Term < e.Term {
+		return errors.New("Invalid term")
+	}
+	e.Results[proposedLeader.NodeID] = 1
+	e.Term = proposedLeader.Term
+	return nil
+}
+
+func (e *Election) SendVote(vote Leader, reply *bool) error {
+	if vote.Term == e.Term {
+		_, ok := e.Results[vote.NodeID]
+		if vote.NodeID == 0 || ok {
+			e.Results[vote.NodeID] += 1
+			*reply = true
+		}
+		return nil
+	} else {
+		return errors.New("Invalid term for client vote")
+	}
+}
+
+func (e *Election) Get(currentLeader Leader, reply *Election) error {
+	if e.Term > currentLeader.Term {
+		*reply = *e
+	} else {
+		return errors.New("No new election found")
+	}
+	return nil
+}
+
+func (e *Election) Clear(currTerm int, reply *bool) error {
+	*e = Election{
+		Results: make(map[int]int),
+		Term:    currTerm + 1,
+	}
+	*reply = true
+	return nil
 }
 
 /*---------------*/
