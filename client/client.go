@@ -22,7 +22,7 @@ const (
 	DEAD_TIME      = 6	
 
 	// times in milliseconds
-	HEARTBEAT_TIME = 150
+	HEARTBEAT_TIME = 50
 	CANDIDATE_TIME = 150
 	ELECTION_TIME  = 100
 )
@@ -129,7 +129,7 @@ func heartbeat(server *rpc.Client, node *shared.Node, membership *shared.Members
 
 	var election = shared.Election{}
 	if err := server.Call("Election.Get", leader, &election); err == nil {
-		if len(election.Results) > 0 && election.Term > highest_term {
+		if len(election.Results) > 0 && election.Term > highest_term && candidate == false{
 			vote := 0
 			reply := false
 			for key := range election.Results {
@@ -213,6 +213,7 @@ func tryCandidate(server *rpc.Client, membership *shared.Membership) {
 func countVotes(server *rpc.Client) {
 	var election = shared.Election{}
 	numNodes := 1
+	reply := false
 	server.Call("Election.Get", leader, &election)
 	fmt.Printf("----   Election Results For Term %d  ----\n", election.Term)
 	for k, v := range election.Results {
@@ -222,7 +223,6 @@ func countVotes(server *rpc.Client) {
 	fmt.Printf("Counted %d votes for Node %d with num nodes: %d\n", election.Results[self_node.ID], self_node.ID, numNodes)
 	if election.Results[self_node.ID] > numNodes/2 {
 		// clear election
-		reply := false
 		new_leader := shared.Leader{
 			NodeID: self_node.ID,
 			Term:   election.Term,
@@ -231,6 +231,7 @@ func countVotes(server *rpc.Client) {
 		server.Call("Election.Clear", election.Term, &reply)
 	} else {
 		candidate = false
+		server.Call("Election.Drop", self_node.ID, &reply)
 	}
 }
 

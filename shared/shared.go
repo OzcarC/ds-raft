@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"math/rand"
+	"sync"
 )
 
 const (
@@ -43,6 +44,7 @@ func RandInt() int {
 // Membership struct represents participanting nodes
 type Membership struct {
 	Members map[int]Node
+	mu 		sync.Mutex
 }
 
 // Returns a new instance of a Membership (pointer).
@@ -54,6 +56,8 @@ func NewMembership() *Membership {
 
 // Adds a node to the membership list.
 func (m *Membership) Add(payload Node, reply *Node) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if _, ok := m.Members[payload.ID]; ok {
 		return errors.New("ID already exists")
 	}
@@ -64,6 +68,8 @@ func (m *Membership) Add(payload Node, reply *Node) error {
 
 // Updates a node in the membership list.
 func (m *Membership) Update(payload Node, reply *Node) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if _, ok := m.Members[payload.ID]; !ok {
 		return errors.New("ID does not exist")
 	}
@@ -74,6 +80,8 @@ func (m *Membership) Update(payload Node, reply *Node) error {
 }
 
 func (m *Membership) GetNumNodes(id int, reply *int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	num := 0
 	for _, node := range m.Members{
 		if node.Alive {
@@ -104,9 +112,12 @@ func (l *Leader) Update(newLeader *Leader, reply *bool) error {
 type Election struct {
 	Results map[int]int
 	Term    int
+	mu 		sync.Mutex
 }
 
 func (e *Election) RequestVote(proposedLeader Leader, reply *int) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	if proposedLeader.Term < e.Term {
 		return errors.New("Invalid term")
 	}
@@ -116,6 +127,8 @@ func (e *Election) RequestVote(proposedLeader Leader, reply *int) error {
 }
 
 func (e *Election) SendVote(vote Leader, reply *bool) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	if vote.Term == e.Term {
 		_, ok := e.Results[vote.NodeID]
 		if vote.NodeID == 0 || ok {
@@ -129,6 +142,8 @@ func (e *Election) SendVote(vote Leader, reply *bool) error {
 }
 
 func (e *Election) Get(currentLeader Leader, reply *Election) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	if e.Term > currentLeader.Term {
 		*reply = *e
 	} else {
@@ -138,10 +153,18 @@ func (e *Election) Get(currentLeader Leader, reply *Election) error {
 }
 
 func (e *Election) Clear(currTerm int, reply *bool) error {
-	*e = Election{
-		Results: make(map[int]int),
-		Term:    currTerm + 1,
-	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.Results = make(map[int]int)
+	e.Term = currTerm + 1
+	*reply = true
+	return nil
+}
+
+func (e *Election) Drop(nodeID int, reply *bool) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.Results, nodeID)
 	*reply = true
 	return nil
 }
@@ -157,6 +180,7 @@ type Request struct {
 // Requests struct represents pending message requests
 type Requests struct {
 	Pending map[int]Membership
+	mu 		sync.Mutex
 }
 
 // Returns a new instance of a Membership (pointer).
@@ -169,6 +193,8 @@ func NewRequests() *Requests {
 
 // Adds a new message request to the pending list
 func (req *Requests) Add(payload Request, reply *bool) error {
+	req.mu.Lock()
+	defer req.mu.Unlock()
 	if table, ok := req.Pending[payload.ID]; ok {
 		combined := CombineTables(&table, &payload.Table)
 		req.Pending[payload.ID] = *combined
@@ -181,6 +207,8 @@ func (req *Requests) Add(payload Request, reply *bool) error {
 
 // Listens to communication from neighboring nodes.
 func (req *Requests) Listen(ID int, reply *Membership) error {
+	req.mu.Lock()
+	defer req.mu.Unlock()
 	if table, ok := req.Pending[ID]; ok {
 		*reply = table
 		delete(req.Pending, ID)
