@@ -1,0 +1,12 @@
+Ozcar Cayetano
+Jonathan Dees
+
+# How to Run
+
+1. In project root, run `make`
+2. Run `./server.exe`
+3. Run `./client.exe i` for i in range 1 to 8
+
+# Notes
+
+Node 4 is hard coded to fail after 60 seconds. Since 8 nodes are being tested, we hard coded the amount of required votes to be greater than or equal to (N + 1) / 2 for a candidate to become a leader.

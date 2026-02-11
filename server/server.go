@@ -17,7 +17,7 @@ func main() {
 	}
 	election := shared.Election{
 		Results: make(map[int]int),
-		Term:    1,
+		Term:    0,
 	}
 
 	// register nodes with `rpc.DefaultServer`

@@ -17,21 +17,22 @@ const (
 	MAX_NODES = 8
 
 	// times in seconds
-	MSG_TIME       = 2
-	KILL_TIME      = 60
-	DEAD_TIME      = 6	
+	MSG_TIME  = 2
+	KILL_TIME = 60
+	DEAD_TIME = 6
 
 	// times in milliseconds
 	HEARTBEAT_TIME = 50
 	CANDIDATE_TIME = 150
-	ELECTION_TIME  = 100
+	ELECTION_TIME  = 50
 )
 
 var self_node shared.Node
 var start_time = time.Now()
 var leader shared.Leader
 var candidate bool = false
-var highest_term = 0
+var curr_term = 0
+var voted_for = 0
 
 // Send the current membership table to a neighboring node with the provided ID
 func sendMessage(server *rpc.Client, id int, membership shared.Membership) {
@@ -127,26 +128,32 @@ func heartbeat(server *rpc.Client, node *shared.Node, membership *shared.Members
 
 	server.Call("Membership.Update", payload, &self_node_response)
 
-	var election = shared.Election{}
-	if err := server.Call("Election.Get", leader, &election); err == nil {
-		if len(election.Results) > 0 && election.Term > highest_term && candidate == false{
-			vote := 0
-			reply := false
-			for key := range election.Results {
-				vote = key
-				break
+	if !membership.Members[leader.NodeID].Alive {
+		var election = shared.Election{}
+		if err := server.Call("Election.Get", leader, &election); err == nil {
+			if election.Term > curr_term {
+				curr_term = election.Term
+				voted_for = 0
 			}
-			accepted_leader := shared.Leader{
-				NodeID: vote,
-				Term:   election.Term,
-			}
-			server.Call("Election.SendVote", accepted_leader, &reply)
-			if reply {
-				highest_term = election.Term
+			if len(election.Results) > 0 && curr_term == election.Term && candidate == false && voted_for == 0 {
+				vote := 0
+				reply := false
+				for key := range election.Results {
+					if membership.Members[key].Alive {
+						vote = key
+						break
+					}
+				}
+				accepted_leader := shared.Leader{
+					NodeID: vote,
+					Term:   election.Term,
+				}
+				server.Call("Election.SendVote", accepted_leader, &reply)
+				if reply {
+					voted_for = vote
+				}
 			}
 		}
-	} else {
-		fmt.Println(err)
 	}
 
 	time.AfterFunc(time.Millisecond*HEARTBEAT_TIME, func() { heartbeat(server, node, membership, id) })
@@ -182,7 +189,6 @@ func shareTables(server *rpc.Client, neighbors [2]int, membership *shared.Member
 		// start election
 		timeout := time.Duration(rand.IntN(CANDIDATE_TIME) + CANDIDATE_TIME)
 		time.AfterFunc(time.Millisecond*timeout, func() { tryCandidate(server, membership) })
-		fmt.Printf("Starting election timeout in Node %d\n", self_node.ID)
 	}
 
 	time.AfterFunc(time.Second*MSG_TIME, func() { shareTables(server, neighbors, membership, id) })
@@ -192,7 +198,7 @@ func tryCandidate(server *rpc.Client, membership *shared.Membership) {
 
 	server.Call("Leader.Get", leader, &leader)
 	if leader.NodeID == 0 || (leader.NodeID != 0 && !membership.Members[leader.NodeID].Alive) {
-		fmt.Printf("Election starting in Node %d\n", self_node.ID)
+
 		candidate = true
 		// do candidate stuff
 		proposal := shared.Leader{
@@ -200,6 +206,8 @@ func tryCandidate(server *rpc.Client, membership *shared.Membership) {
 			Term:   leader.Term + 1,
 		}
 		reply := 0
+		curr_term = leader.Term + 1
+		voted_for = self_node.ID
 		server.Call("Election.RequestVote", proposal, &reply)
 		// set timer, on timeout check election
 		timeout := time.Duration(rand.IntN(ELECTION_TIME))
@@ -212,16 +220,15 @@ func tryCandidate(server *rpc.Client, membership *shared.Membership) {
 
 func countVotes(server *rpc.Client) {
 	var election = shared.Election{}
-	numNodes := 1
 	reply := false
 	server.Call("Election.Get", leader, &election)
 	fmt.Printf("----   Election Results For Term %d  ----\n", election.Term)
 	for k, v := range election.Results {
 		fmt.Printf("Votes for Node %d: %d\n", k, v)
 	}
-	server.Call("Membership.GetNumNodes", self_node.ID, &numNodes)
-	fmt.Printf("Counted %d votes for Node %d with num nodes: %d\n", election.Results[self_node.ID], self_node.ID, numNodes)
-	if election.Results[self_node.ID] > numNodes/2 {
+	fmt.Println()
+
+	if election.Results[self_node.ID] >= (MAX_NODES/2 + 1) {
 		// clear election
 		new_leader := shared.Leader{
 			NodeID: self_node.ID,
@@ -232,6 +239,7 @@ func countVotes(server *rpc.Client) {
 	} else {
 		candidate = false
 		server.Call("Election.Drop", self_node.ID, &reply)
+		voted_for = 0
 	}
 }
 

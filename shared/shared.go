@@ -44,7 +44,7 @@ func RandInt() int {
 // Membership struct represents participanting nodes
 type Membership struct {
 	Members map[int]Node
-	mu 		sync.Mutex
+	mu      sync.Mutex
 }
 
 // Returns a new instance of a Membership (pointer).
@@ -83,7 +83,7 @@ func (m *Membership) GetNumNodes(id int, reply *int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	num := 0
-	for _, node := range m.Members{
+	for _, node := range m.Members {
 		if node.Alive {
 			num++
 		}
@@ -112,7 +112,7 @@ func (l *Leader) Update(newLeader *Leader, reply *bool) error {
 type Election struct {
 	Results map[int]int
 	Term    int
-	mu 		sync.Mutex
+	mu      sync.Mutex
 }
 
 func (e *Election) RequestVote(proposedLeader Leader, reply *int) error {
@@ -131,7 +131,7 @@ func (e *Election) SendVote(vote Leader, reply *bool) error {
 	defer e.mu.Unlock()
 	if vote.Term == e.Term {
 		_, ok := e.Results[vote.NodeID]
-		if vote.NodeID == 0 || ok {
+		if vote.NodeID != 0 || ok {
 			e.Results[vote.NodeID] += 1
 			*reply = true
 		}
@@ -180,7 +180,7 @@ type Request struct {
 // Requests struct represents pending message requests
 type Requests struct {
 	Pending map[int]Membership
-	mu 		sync.Mutex
+	mu      sync.Mutex
 }
 
 // Returns a new instance of a Membership (pointer).
